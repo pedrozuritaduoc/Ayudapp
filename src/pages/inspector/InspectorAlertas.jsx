@@ -1,19 +1,15 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { db } from "../../firebase/config";
-import { 
-  collection, 
-  query, 
-  where, 
-  getDocs, 
-  addDoc, 
-  updateDoc, 
-  doc 
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  addDoc,
+  updateDoc,
+  doc,
 } from "firebase/firestore";
-
-// IMPORTA jsPDF y autotable
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable"; // <-- Esto es FUNDAMENTAL
 
 const InspectorAlertas = () => {
   const navigate = useNavigate();
@@ -22,44 +18,39 @@ const InspectorAlertas = () => {
   const [usuarios, setUsuarios] = useState([]);
   const [mensaje, setMensaje] = useState("");
 
-  // Carga estudiantes y usuarios (apoderados)
   useEffect(() => {
     const cargarEstudiantes = async () => {
       const snap = await getDocs(collection(db, "estudiantes"));
-      setEstudiantes(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setEstudiantes(snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
     };
     const cargarUsuarios = async () => {
       const snap = await getDocs(collection(db, "usuarios"));
-      setUsuarios(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setUsuarios(snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
     };
     cargarEstudiantes();
     cargarUsuarios();
   }, []);
 
-  // Cargar alertas completadas **no enviadas**
   useEffect(() => {
     const cargarAlertas = async () => {
       const q = query(
         collection(db, "alertas"),
         where("estado", "==", "completada"),
-        where("enviadaAlPadre", "in", [false, null]) // Filtrar sólo las NO enviadas
+        where("enviadaAlPadre", "in", [false, null])
       );
       const snap = await getDocs(q);
-      setAlertas(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setAlertas(snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
     };
     cargarAlertas();
   }, []);
 
-  // Helper para obtener estudiante y apoderado
-  const getEstudiante = (id) => estudiantes.find(e => e.id === id);
-  const getApoderado = (id) => usuarios.find(u => u.id === id);
+  const getEstudiante = (id) => estudiantes.find((e) => e.id === id);
+  const getApoderado = (id) => usuarios.find((u) => u.id === id);
 
-  // Enviar alerta al padre (crear nueva en alertas_enviadas y marcar como enviada)
   const handleEnviarAlPadre = async (alerta) => {
     try {
       const estudiante = getEstudiante(alerta.estudianteId);
       const apoderado = estudiante ? getApoderado(estudiante.idApoderado) : null;
-      // Elimina 'enviadaAlPadre' antes de crear la alerta_enviada
       const { enviadaAlPadre, ...alertaSinFlag } = alerta;
       const nuevaAlerta = {
         ...alertaSinFlag,
@@ -76,61 +67,15 @@ const InspectorAlertas = () => {
           : null,
       };
 
-      // 1. Enviar alerta (sin el campo enviadaAlPadre)
       await addDoc(collection(db, "alertas_enviadas"), nuevaAlerta);
-
-      // 2. Marcar la alerta original como enviada
       await updateDoc(doc(db, "alertas", alerta.id), { enviadaAlPadre: true });
-
-      // 3. Quitar del estado local
-      setAlertas(prev => prev.filter(a => a.id !== alerta.id));
+      setAlertas((prev) => prev.filter((a) => a.id !== alerta.id));
 
       setMensaje("✅ ¡Alerta enviada al padre/apoderado!");
       setTimeout(() => setMensaje(""), 3000);
     } catch (e) {
       setMensaje("❌ Error al enviar la alerta: " + e.message);
     }
-  };
-
-  // NUEVO: Generar reporte PDF mensual
-  const handleGenerarReporte = () => {
-    // Filtrar por mes actual (puedes personalizar por mes/año)
-    const ahora = new Date();
-    const mesActual = ahora.getMonth(); // 0 = enero
-    const anioActual = ahora.getFullYear();
-
-    const alertasMes = alertas.filter(alerta => {
-      const fecha = alerta.fecha?.toDate?.() || null;
-      return (
-        fecha &&
-        fecha.getMonth() === mesActual &&
-        fecha.getFullYear() === anioActual
-      );
-    });
-
-    // Armar datos para la tabla PDF
-    const rows = alertasMes.map(alerta => {
-      const estudiante = getEstudiante(alerta.estudianteId);
-      return [
-        estudiante?.nombre || alerta.nombreEstudiante || alerta.estudianteId,
-        estudiante?.curso || "-",
-        alerta.fecha?.toDate?.().toLocaleString() || "-",
-        alerta.ubicacion || "-",
-        alerta.observacion || "-"
-      ];
-    });
-
-    // Crear PDF
-    const docPdf = new jsPDF();
-    docPdf.text(`Reporte Mensual de Alertas Completadas (${ahora.toLocaleString('default', { month: 'long', year: 'numeric' })})`, 10, 18);
-    autoTable(docPdf, {
-      head: [["Estudiante", "Curso", "Fecha y Hora", "Ubicación", "Observación"]],
-      body: rows,
-      startY: 24,
-      styles: { fontSize: 10 }
-    });
-
-    docPdf.save(`reporte_alertas_${anioActual}_${mesActual + 1}.pdf`);
   };
 
   return (
@@ -140,27 +85,27 @@ const InspectorAlertas = () => {
           ⬅ Volver al menú Inspector
         </button>
         <h2 style={styles.titulo}>Alertas Completadas</h2>
-        <button onClick={handleGenerarReporte} style={styles.botonReporte}>
-          Generar Reporte Mensual (PDF)
-        </button>
         <hr style={styles.separator} />
         {mensaje && <div style={styles.mensaje}>{mensaje}</div>}
         <ul style={styles.lista}>
           {alertas.length === 0 && (
             <li style={styles.noAlertas}>No hay alertas completadas.</li>
           )}
-          {alertas.map(alerta => {
+          {alertas.map((alerta) => {
             const estudiante = getEstudiante(alerta.estudianteId);
             const apoderado = estudiante ? getApoderado(estudiante.idApoderado) : null;
             return (
               <li key={alerta.id} style={styles.item}>
-                <b>Estudiante:</b> {estudiante?.nombre || alerta.nombreEstudiante || alerta.estudianteId}
+                <b>Estudiante:</b>{" "}
+                {estudiante?.nombre || alerta.nombreEstudiante || alerta.estudianteId}
                 <br />
-                <b>Padre/Apoderado:</b> {apoderado?.nombre || estudiante?.idApoderado || "No encontrado"}
+                <b>Padre/Apoderado:</b>{" "}
+                {apoderado?.nombre || estudiante?.idApoderado || "No encontrado"}
                 <br />
                 <b>Curso:</b> {estudiante?.curso || "-"}
                 <br />
-                <b>Fecha y hora:</b> {alerta.fecha?.toDate?.().toLocaleString?.() || "-"}
+                <b>Fecha y hora:</b>{" "}
+                {alerta.fecha?.toDate?.().toLocaleString?.() || "-"}
                 <br />
                 <b>Ubicación:</b> {alerta.ubicacion || "-"}
                 <br />
@@ -219,21 +164,9 @@ const styles = {
     fontWeight: 700,
     textAlign: "center",
   },
-  botonReporte: {
-    backgroundColor: "#2E3A59",
-    color: "#fff",
-    border: "none",
-    borderRadius: "0.7rem",
-    padding: "0.7rem 1.6rem",
-    cursor: "pointer",
-    fontWeight: "bold",
-    fontSize: "1rem",
-    marginBottom: "1.3rem",
-    float: "right"
-  },
   separator: {
     margin: "1.3rem 0",
-    clear: "both"
+    clear: "both",
   },
   mensaje: {
     color: "#178a4c",

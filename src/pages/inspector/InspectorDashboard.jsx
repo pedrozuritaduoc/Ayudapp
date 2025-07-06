@@ -1,58 +1,132 @@
-// src/pages/inspector/InspectorDashboard.jsx
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { db } from "../../firebase/config";
 import { collection, onSnapshot, getDocs } from "firebase/firestore";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+
+const meses = [
+  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
+];
 
 const InspectorDashboard = () => {
   const navigate = useNavigate();
   const [alertas, setAlertas] = useState([]);
   const [usuarios, setUsuarios] = useState([]);
   const [estudiantes, setEstudiantes] = useState([]);
+  const [filtroEstado, setFiltroEstado] = useState("");
+  const [filtroMes, setFiltroMes] = useState("");
+  const [filtroAnio, setFiltroAnio] = useState("");
 
-  // Traer usuarios
+  // Calcular años únicos de las alertas (para el select de año)
+  const [aniosDisponibles, setAniosDisponibles] = useState([]);
+
+  // ───────── CARGA INICIAL ─────────
   useEffect(() => {
     const cargarUsuarios = async () => {
       const snap = await getDocs(collection(db, "usuarios"));
-      setUsuarios(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setUsuarios(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     };
     cargarUsuarios();
   }, []);
 
-  // Traer estudiantes
   useEffect(() => {
     const cargarEstudiantes = async () => {
       const snap = await getDocs(collection(db, "estudiantes"));
-      setEstudiantes(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setEstudiantes(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     };
     cargarEstudiantes();
   }, []);
 
-  // Escuchar todas las alertas en tiempo real (sin filtro)
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "alertas"), (snap) => {
       const lista = snap.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .map((d) => ({ id: d.id, ...d.data() }))
         .sort((a, b) => (b.fecha?.toDate?.() || 0) - (a.fecha?.toDate?.() || 0));
       setAlertas(lista);
+
+      // Calcular años únicos automáticamente
+      const anios = Array.from(
+        new Set(
+          lista
+            .map(a => a.fecha?.toDate?.()?.getFullYear())
+            .filter(anio => !!anio)
+        )
+      ).sort((a, b) => b - a);
+      setAniosDisponibles(anios);
     });
     return () => unsub();
   }, []);
 
-  // Helpers para nombres
-  const getDocenteNombre = (docenteId) => {
-    const usuario = usuarios.find(u => u.id === docenteId);
-    return usuario ? usuario.nombre : docenteId || "-";
-  };
-  const getEstudianteNombre = (estudianteId, nombreEstudiante) => {
-    const estudiante = estudiantes.find(e => e.id === estudianteId);
-    return estudiante ? estudiante.nombre : (nombreEstudiante || estudianteId || "-");
+  // ───────── HELPERS ─────────
+  const getDocenteNombre = (id) => usuarios.find((u) => u.id === id)?.nombre ?? id ?? "-";
+  const getEstudianteNombre = (id, nombreEstudiante) =>
+    estudiantes.find((e) => e.id === id)?.nombre ?? nombreEstudiante ?? id ?? "-";
+
+  // ───────── FILTRO ─────────
+  const filtrarAlertas = () => {
+    return alertas.filter((a) => {
+      // Estado
+      const estadoOk = filtroEstado ? a.estado === filtroEstado : true;
+
+      // Mes y año
+      let fechaOk = true;
+      const fecha = a.fecha?.toDate?.();
+      if (filtroMes) {
+        fechaOk = fechaOk && fecha && fecha.getMonth() + 1 === parseInt(filtroMes);
+      }
+      if (filtroAnio) {
+        fechaOk = fechaOk && fecha && fecha.getFullYear() === parseInt(filtroAnio);
+      }
+      return estadoOk && fechaOk;
+    });
   };
 
-  // Botón volver
-  const handleVolver = () => {
-    navigate('/inspector');
+  const handleGenerarPDF = () => {
+    const filtradas = filtrarAlertas();
+
+    const doc = new jsPDF();
+    doc.setFontSize(15);
+    doc.text("Reporte de Alertas - Inspector", 14, 18);
+
+    if (filtroEstado || filtroMes || filtroAnio) {
+      doc.setFontSize(11);
+      doc.text(
+        `Filtros: ${filtroEstado || "Todos los estados"} / ` +
+        `${filtroMes ? meses[filtroMes - 1] : "Todos los meses"} / ` +
+        `${filtroAnio || "Todos los años"}`,
+        14, 25
+      );
+    }
+
+    const rows = filtradas.map((a) => [
+      a.estado,
+      getDocenteNombre(a.docenteId),
+      getEstudianteNombre(a.estudianteId, a.nombreEstudiante),
+      a.fecha?.toDate?.().toLocaleString() ?? "-",
+      a.ubicacion ?? "-",
+    ]);
+
+    autoTable(doc, {
+      head: [["Estado", "Docente", "Estudiante", "Fecha y Hora", "Ubicación"]],
+      body: rows,
+      startY: filtroEstado || filtroMes || filtroAnio ? 30 : 25,
+      theme: "grid",
+      headStyles: { fillColor: [22, 160, 133], textColor: 255 },
+      styles: { fontSize: 10 },
+    });
+
+    doc.save("reporte_alertas_inspector.pdf");
   };
+
+  // ───────── AGREGAR handleVolver ─────────
+  const handleVolver = () => {
+    navigate("/inspector");
+  };
+
+  // ───────── RENDER ─────────
+  const alertasVisibles = filtrarAlertas();
 
   return (
     <div style={styles.container}>
@@ -61,6 +135,34 @@ const InspectorDashboard = () => {
           ⬅ Volver al menú Inspector
         </button>
         <h2 style={styles.titulo}>Dashboard de Alertas Inspector</h2>
+
+        <div style={{ display: "flex", gap: "1rem", marginBottom: "1rem" }}>
+          {/* Estado */}
+          <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)}>
+            <option value="">-- Todos los estados --</option>
+            <option value="pendiente">Pendiente</option>
+            <option value="completada">Completada</option>
+            <option value="cancelada">Cancelada</option>
+          </select>
+          {/* Mes */}
+          <select value={filtroMes} onChange={e => setFiltroMes(e.target.value)}>
+            <option value="">-- Mes --</option>
+            {meses.map((nombre, idx) => (
+              <option key={idx + 1} value={idx + 1}>{nombre}</option>
+            ))}
+          </select>
+          {/* Año */}
+          <select value={filtroAnio} onChange={e => setFiltroAnio(e.target.value)}>
+            <option value="">-- Año --</option>
+            {aniosDisponibles.map(anio => (
+              <option key={anio} value={anio}>{anio}</option>
+            ))}
+          </select>
+          <button onClick={handleGenerarPDF} style={styles.botonGenerar}>
+            📄 Generar PDF
+          </button>
+        </div>
+
         <hr style={styles.separator} />
         <div style={{ overflowX: "auto" }}>
           <table style={styles.tabla}>
@@ -74,26 +176,23 @@ const InspectorDashboard = () => {
               </tr>
             </thead>
             <tbody>
-              {alertas.length === 0 && (
+              {alertasVisibles.length === 0 ? (
                 <tr>
                   <td colSpan={5} style={{ textAlign: "center", color: "#888" }}>
-                    No hay alertas registradas
+                    No hay alertas con esos filtros
                   </td>
                 </tr>
+              ) : (
+                alertasVisibles.map((a) => (
+                  <tr key={a.id}>
+                    <td style={styles.td}>{a.estado}</td>
+                    <td style={styles.td}>{getDocenteNombre(a.docenteId)}</td>
+                    <td style={styles.td}>{getEstudianteNombre(a.estudianteId, a.nombreEstudiante)}</td>
+                    <td style={styles.td}>{a.fecha?.toDate ? a.fecha.toDate().toLocaleString() : "-"}</td>
+                    <td style={styles.td}>{a.ubicacion ?? "-"}</td>
+                  </tr>
+                ))
               )}
-              {alertas.map(alerta => (
-                <tr key={alerta.id}>
-                  <td style={styles.td}>{alerta.estado}</td>
-                  <td style={styles.td}>{getDocenteNombre(alerta.docenteId)}</td>
-                  <td style={styles.td}>
-                    {getEstudianteNombre(alerta.estudianteId, alerta.nombreEstudiante)}
-                  </td>
-                  <td style={styles.td}>
-                    {alerta.fecha?.toDate ? alerta.fecha.toDate().toLocaleString() : "-"}
-                  </td>
-                  <td style={styles.td}>{alerta.ubicacion || "-"}</td>
-                </tr>
-              ))}
             </tbody>
           </table>
         </div>
@@ -120,7 +219,7 @@ const styles = {
     boxShadow: "0 8px 20px rgba(0,0,0,0.1)",
     width: "100%",
     maxWidth: "900px",
-    minHeight: "450px"
+    minHeight: "450px",
   },
   botonVolver: {
     marginBottom: "1.2rem",
@@ -131,29 +230,39 @@ const styles = {
     borderRadius: "0.7rem",
     cursor: "pointer",
     fontWeight: "bold",
-    fontSize: "1rem"
+    fontSize: "1rem",
+  },
+  botonGenerar: {
+    backgroundColor: "#2E3A59",
+    color: "#fff",
+    padding: "0.6rem 1.2rem",
+    border: "none",
+    borderRadius: "0.7rem",
+    cursor: "pointer",
+    fontWeight: "bold",
+    fontSize: "1rem",
   },
   titulo: {
     color: "#2E3A59",
     marginBottom: "1rem",
     fontSize: "1.8rem",
-    textAlign: "center"
+    textAlign: "center",
   },
   separator: {
-    margin: "2rem 0 1.5rem 0"
+    margin: "2rem 0 1.5rem 0",
   },
   tabla: {
     width: "100%",
     borderCollapse: "collapse",
     fontSize: "1rem",
-    marginTop: "1.5rem"
+    marginTop: "1.5rem",
   },
   th: {
     background: "#e6f5f4",
     padding: "0.9rem",
     fontWeight: 700,
     color: "#17525a",
-    borderRadius: "0.3rem"
+    borderRadius: "0.3rem",
   },
   td: {
     background: "#f8fafc",
@@ -161,8 +270,8 @@ const styles = {
     padding: "0.8rem",
     borderRadius: "0.2rem",
     textAlign: "center",
-    borderBottom: "1px solid #e4e4e7"
-  }
+    borderBottom: "1px solid #e4e4e7",
+  },
 };
 
 export default InspectorDashboard;
